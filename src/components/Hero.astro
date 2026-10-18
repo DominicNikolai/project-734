@@ -1,0 +1,323 @@
+---
+import { baseUrl } from '@/utils/functions';
+
+const sourceVideoUrl = baseUrl('/assets/green-forest.webm');
+---
+
+<canvas id="mainCanvas" aria-label="Video processed with animated geometric shapes"></canvas>
+<video id="sourceVideo" src={sourceVideoUrl} autoplay loop muted playsinline></video>
+<input type="file" id="videoInput" accept="video/*" />
+<div class="credit">Video: BLM Oregon & Washington — South Fork Clackamas Wild and Scenic River (public domain)</div>
+
+<script>
+  import GUI from 'lil-gui';
+
+  function requireElement<T extends HTMLElement>(selector: string): T {
+    const element = document.querySelector<T>(selector);
+    if (!element) throw new Error(`Required element was not found: ${selector}`);
+    return element;
+  }
+
+  function requireContext(canvas: HTMLCanvasElement, options?: CanvasRenderingContext2DSettings): CanvasRenderingContext2D {
+    const context = canvas.getContext('2d', options);
+    if (!context) throw new Error('Could not create a canvas context.');
+    return context;
+  }
+
+  const canvas = requireElement<HTMLCanvasElement>('#mainCanvas');
+  const ctx = requireContext(canvas);
+  const offscreenCanvas = document.createElement('canvas');
+  const offscreenCtx = requireContext(offscreenCanvas, { willReadFrequently: true });
+  const video = requireElement<HTMLVideoElement>('#sourceVideo');
+  const videoInput = requireElement<HTMLInputElement>('#videoInput');
+
+  const params: {
+    bgColor: string;
+    bgVideoOpacity: number;
+    contrast: number;
+    effectOpacity: number;
+    blendMode: GlobalCompositeOperation;
+    resolution: number;
+    sizeMultiplier: number;
+    minBrightness: number;
+    maxBrightness: number;
+    uploadLocalVideo: () => void;
+    togglePlay: () => void;
+  } = {
+    bgColor: '#000000',
+    bgVideoOpacity: 0.72,
+    contrast: 100,
+    effectOpacity: 0.76,
+    blendMode: 'lighter',
+    resolution: 13,
+    sizeMultiplier: 1.4,
+    minBrightness: 0,
+    maxBrightness: 0.52,
+    uploadLocalVideo: () => videoInput.click(),
+    togglePlay: () => {
+      if (video.paused) {
+        video.play().catch(error => console.error('Video playback failed:', error));
+      } else {
+        video.pause();
+      }
+    }
+  };
+
+  const blendModes: GlobalCompositeOperation[] = [
+    'source-over', 'lighter', 'multiply', 'screen', 'overlay',
+    'darken', 'lighten', 'color-dodge', 'color-burn',
+    'hard-light', 'soft-light', 'difference', 'exclusion',
+    'hue', 'saturation', 'color', 'luminosity'
+  ];
+
+  const gui = new GUI({ title: 'Scene Settings' });
+
+  const fVideo = gui.addFolder('Video & Background');
+  fVideo.add(params, 'bgVideoOpacity', 0, 1, 0.01).name('Bg Video Opacity');
+  fVideo.add(params, 'contrast', 0, 300, 1).name('Contrast (%)');
+  fVideo.addColor(params, 'bgColor').name('Background Color');
+
+  const fEffect = gui.addFolder('Shape Effect');
+  fEffect.add(params, 'effectOpacity', 0, 1, 0.01).name('Effect Opacity');
+  fEffect.add(params, 'blendMode', blendModes).name('Blend Mode');
+  fEffect.add(params, 'resolution', 5, 50, 1).name('Grid Size (px)');
+  fEffect.add(params, 'sizeMultiplier', 0.1, 3, 0.1).name('Size Multiplier');
+
+  const fLevels = gui.addFolder('Brightness Filter');
+  fLevels.add(params, 'minBrightness', 0, 1, 0.01).name('Min Threshold');
+  fLevels.add(params, 'maxBrightness', 0, 1, 0.01).name('Max Threshold');
+
+  const fControls = gui.addFolder('Controls');
+  fControls.add(params, 'uploadLocalVideo').name('Upload Local Video');
+  fControls.add(params, 'togglePlay').name('Play / Pause');
+
+  let localVideoUrl: string | undefined;
+
+  videoInput.addEventListener('change', event => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+
+    const file = target.files?.[0];
+    if (!file) return;
+
+    if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+    localVideoUrl = URL.createObjectURL(file);
+    video.src = localVideoUrl;
+    video.play().catch(error => console.error('Video playback failed:', error));
+  });
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  function pseudoRandom(x: number, y: number) {
+    return Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+  }
+
+  function definePolygon(context: CanvasRenderingContext2D, x: number, y: number, radius: number, sides: number) {
+    for (let i = 0; i < sides; i++) {
+      const angle = i * 2 * Math.PI / sides - Math.PI / 2;
+      if (i === 0) context.moveTo(x + radius * Math.cos(angle), y + radius * Math.sin(angle));
+      else context.lineTo(x + radius * Math.cos(angle), y + radius * Math.sin(angle));
+    }
+    context.closePath();
+  }
+
+  function defineStar(context: CanvasRenderingContext2D, x: number, y: number, radius: number, innerRadius: number, points: number) {
+    for (let i = 0; i < points * 2; i++) {
+      const pointRadius = i % 2 === 0 ? radius : innerRadius;
+      const angle = i * Math.PI / points - Math.PI / 2;
+      if (i === 0) context.moveTo(x + pointRadius * Math.cos(angle), y + pointRadius * Math.sin(angle));
+      else context.lineTo(x + pointRadius * Math.cos(angle), y + pointRadius * Math.sin(angle));
+    }
+    context.closePath();
+  }
+
+  function drawShape(context: CanvasRenderingContext2D, type: number, x: number, y: number, size: number) {
+    context.beginPath();
+
+    const half = size / 2;
+    const quarter = size / 4;
+
+    switch (type) {
+      case 0:
+        context.arc(x, y, half, 0, Math.PI * 2);
+        break;
+      case 1:
+        context.rect(x - half, y - half, size, size);
+        break;
+      case 2:
+        context.moveTo(x, y - half);
+        context.lineTo(x + half, y + half);
+        context.lineTo(x - half, y + half);
+        break;
+      case 3:
+        context.moveTo(x - half, y - half);
+        context.lineTo(x + half, y - half);
+        context.lineTo(x, y + half);
+        break;
+      case 4:
+        context.rect(x - half, y - quarter, size, half);
+        break;
+      case 5:
+        context.rect(x - quarter, y - half, half, size);
+        break;
+      case 6:
+        context.moveTo(x, y - half);
+        context.lineTo(x + half, y);
+        context.lineTo(x, y + half);
+        context.lineTo(x - half, y);
+        break;
+      case 7:
+        definePolygon(context, x, y, half, 5);
+        break;
+      case 8:
+        definePolygon(context, x, y, half, 6);
+        break;
+      case 9:
+        definePolygon(context, x, y, half, 8);
+        break;
+      case 10:
+        defineStar(context, x, y, half, half / 2.5, 5);
+        break;
+      case 11: {
+        const thickness = size / 6;
+        context.rect(x - thickness, y - half, thickness * 2, size);
+        context.rect(x - half, y - thickness, size, thickness * 2);
+        break;
+      }
+      case 12:
+        context.arc(x, y, half, Math.PI, 0);
+        context.closePath();
+        break;
+      case 13:
+        context.arc(x, y, half, 0, Math.PI * 2);
+        context.arc(x, y, half / 2, 0, Math.PI * 2, true);
+        break;
+    }
+
+    context.fill();
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = params.bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (video.readyState < 2) return;
+
+    const videoRatio = video.videoWidth / video.videoHeight;
+    const canvasRatio = canvas.width / canvas.height;
+
+    let drawWidth: number;
+    let drawHeight: number;
+    let offsetX: number;
+    let offsetY: number;
+
+    if (canvasRatio > videoRatio) {
+      drawWidth = canvas.width;
+      drawHeight = canvas.width / videoRatio;
+      offsetX = 0;
+      offsetY = (canvas.height - drawHeight) / 2;
+    } else {
+      drawWidth = canvas.height * videoRatio;
+      drawHeight = canvas.height;
+      offsetX = (canvas.width - drawWidth) / 2;
+      offsetY = 0;
+    }
+
+    const contrast = `contrast(${params.contrast}%)`;
+
+    if (params.bgVideoOpacity > 0) {
+      ctx.globalAlpha = params.bgVideoOpacity;
+      ctx.filter = contrast;
+      ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+      ctx.filter = 'none';
+    }
+
+    const resolution = params.resolution;
+    const gridWidth = Math.max(1, Math.ceil(canvas.width / resolution));
+    const gridHeight = Math.max(1, Math.ceil(canvas.height / resolution));
+
+    if (offscreenCanvas.width !== gridWidth) offscreenCanvas.width = gridWidth;
+    if (offscreenCanvas.height !== gridHeight) offscreenCanvas.height = gridHeight;
+
+    offscreenCtx.clearRect(0, 0, gridWidth, gridHeight);
+    offscreenCtx.filter = contrast;
+    offscreenCtx.drawImage(video, offsetX / resolution, offsetY / resolution, drawWidth / resolution, drawHeight / resolution);
+    offscreenCtx.filter = 'none';
+
+    const imageData = offscreenCtx.getImageData(0, 0, gridWidth, gridHeight).data;
+
+    ctx.globalAlpha = params.effectOpacity;
+    ctx.globalCompositeOperation = params.blendMode;
+
+    for (let row = 0; row < gridHeight; row++) {
+      const y = row * resolution + resolution / 2;
+      for (let col = 0; col < gridWidth; col++) {
+        const x = col * resolution + resolution / 2;
+        const index = (row * gridWidth + col) * 4;
+        const red = imageData[index];
+        const green = imageData[index + 1];
+        const blue = imageData[index + 2];
+        const brightness = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+
+        if (brightness >= params.minBrightness && brightness <= params.maxBrightness) {
+          const size = brightness * resolution * params.sizeMultiplier;
+          const shapeType = Math.floor(pseudoRandom(col, row) * 14);
+
+          ctx.fillStyle = `rgb(${red},${green},${blue})`;
+
+          if (size > 0.5) drawShape(ctx, shapeType, x, y, size);
+        }
+      }
+    }
+  }
+
+  video.play().catch(error => console.error('Video playback failed:', error));
+  animate();
+</script>
+
+<style is:global>
+  html,
+  body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #000;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  }
+
+  #mainCanvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    z-index: 1;
+  }
+
+  #sourceVideo,
+  #videoInput {
+    display: none;
+  }
+
+  .credit {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 2;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 0.75rem;
+    pointer-events: none;
+  }
+</style>
